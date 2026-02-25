@@ -126,11 +126,12 @@ def process_data(df: pd.DataFrame) -> pd.DataFrame:
     df.columns = df.columns.str.strip()
     
     # 2. Vektorizovaný převod 'Process Time' na sekundy a minuty
-    # Předpoklad: formát HH:MM:SS
-    # Chyby převádíme na NaT (Not a Time), následně na 0 sekund
     if 'Process Time' in df.columns:
-        # Převedeme na timedelta
-        pt_timedelta = pd.to_timedelta(df['Process Time'], errors='coerce')
+        # OPRAVA: Převedeme datetime.time na string (ošetří Excel engine, který je čte jako time objekty)
+        # pd.to_timedelta totiž vyžaduje stringy nebo numerické hodnoty.
+        time_strings = df['Process Time'].astype(str)
+        pt_timedelta = pd.to_timedelta(time_strings, errors='coerce')
+        
         # Získáme celkové sekundy a převedeme na minuty
         df['Process_Minutes'] = pt_timedelta.dt.total_seconds() / 60.0
         df['Process_Minutes'] = df['Process_Minutes'].fillna(0)
@@ -299,7 +300,7 @@ else:
             # Efektivní iterace přes malé množství dat (zip over arrays je nejrychlejší pro Python smyčky)
             if 'DN NUMBER (SAP)' in sample_df.columns:
                 dn_numbers = sample_df['DN NUMBER (SAP)'].values
-                process_times = sample_df['Process Time'].values if 'Process Time' in sample_df.columns else ["N/A"] * sample_size
+                process_times = sample_df['Process Time'].astype(str).values if 'Process Time' in sample_df.columns else ["N/A"] * sample_size
                 pieces_arr = sample_df['Number of pieces'].values if 'Number of pieces' in sample_df.columns else [0] * sample_size
                 minutes_arr = sample_df['Process_Minutes'].values
                 eff_arr = sample_df['Efficiency_Pcs_Per_Min'].values
@@ -331,12 +332,21 @@ else:
         def generate_excel(dataframe: pd.DataFrame) -> bytes:
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                # Ošetření datetime.time pro zápis do excelu - převedeme na string aby nepadal openpyxl
+                export_df = dataframe.copy()
+                if 'Process Time' in export_df.columns:
+                    export_df['Process Time'] = export_df['Process Time'].astype(str)
+                if 'START' in export_df.columns:
+                    export_df['START'] = export_df['START'].astype(str)
+                if 'END' in export_df.columns:
+                    export_df['END'] = export_df['END'].astype(str)
+                
                 # 1. List: Surová, ale obohacená data
-                dataframe.to_excel(writer, sheet_name='Obohacena_Data', index=False)
+                export_df.to_excel(writer, sheet_name='Obohacena_Data', index=False)
                 
                 # 2. List: Agregovaný souhrn dle Zákazníka (Customer)
-                if 'CUSTOMER' in dataframe.columns:
-                    summary = dataframe.groupby('CUSTOMER').agg(
+                if 'CUSTOMER' in export_df.columns:
+                    summary = export_df.groupby('CUSTOMER').agg(
                         Celkem_Zakazek=('DN NUMBER (SAP)', 'count'),
                         Celkem_Kusu=('Number of pieces', 'sum'),
                         Prumerny_Cas_Min=('Process_Minutes', 'mean')
